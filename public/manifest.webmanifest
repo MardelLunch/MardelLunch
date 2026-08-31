@@ -1,0 +1,11 @@
+{
+  "name": "Mardel Lunch",
+  "short_name": "Mardel",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1B4CA1",
+  "theme_color": "#1B4CA1",
+  "icons": [
+    { "src": "/mascota.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" }
+  ]
+}
