@@ -39,13 +39,18 @@ const CARTA = [
   ["Tortilla de papa", 9000],
 ];
 
+const conMayus = (t) => {
+  const x = String(t || "").trim();
+  return x ? x.charAt(0).toUpperCase() + x.slice(1) : x;
+};
+
 /* pasa una carta vieja (por docena) a precio por unidad */
 const aUnidad = (p) => {
   if (p.unit) return p;
   const trae = num((String(p.nombre).match(/^\s*(\d+)/) || [])[1]) || 1;
   return {
     id: p.id,
-    nombre: String(p.nombre).replace(/^\s*\d+\s*/, "") || p.nombre,
+    nombre: conMayus(String(p.nombre).replace(/^\s*\d+\s*/, "")) || conMayus(p.nombre),
     precio: Math.round(num(p.precio) / trae),
     unit: true,
   };
@@ -252,7 +257,7 @@ function Pedido({ productos, onGuardar }) {
         {productos.map((p) => (
           <div className={"ml-prod" + (cant[p.id] ? " activo" : "")} key={p.id}>
             <div className="ml-prod-txt">
-              <strong>{p.nombre}</strong>
+              <strong>{conMayus(p.nombre)}</strong>
               <span className="mono">{pesos(num(p.precio))} c/u</span>
             </div>
             <div className="ml-stepper">
@@ -451,7 +456,7 @@ function Precios({ productos, setProductos }) {
       <p className="ml-nota">Precio de UNA unidad. Una docena se cobra sola: 12 × el precio.</p>
       {productos.map((p) => (
         <div className="ml-precio" key={p.id}>
-          <input className="ml-plano" value={p.nombre} onChange={(e) => editar(p.id, "nombre", e.target.value)} />
+          <input className="ml-plano" value={p.nombre} onChange={(e) => editar(p.id, "nombre", conMayus(e.target.value))} />
           <input className="ml-plano mono corto" type="number" value={p.precio} onChange={(e) => editar(p.id, "precio", e.target.value)} />
           <button className="ml-x" onClick={() => setProductos(productos.filter((x) => x.id !== p.id))}>×</button>
         </div>
