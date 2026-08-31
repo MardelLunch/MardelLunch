@@ -21,22 +21,35 @@ const tituloDia = (f) => {
   return dias[d.getDay()] + " " + f.slice(8, 10) + "/" + f.slice(5, 7);
 };
 
+/* precios POR UNIDAD */
 const CARTA = [
-  ["12 empanadas", 15000],
-  ["12 canastitas", 15000],
-  ["12 pizzetas", 12000],
-  ["12 chips", 13500],
-  ["12 fosforitos", 13500],
-  ["12 albondiguitas", 12500],
-  ["12 salchichitas envueltas", 9000],
-  ["12 medialunas j&q", 15500],
-  ["12 morenitos", 16000],
-  ["8 sang. de miga", 14000],
-  ["12 sang. de pollo", 16000],
-  ["12 sang. de milanesa", 16500],
-  ["12 sang. de carne desmechada", 16500],
+  ["Empanadas", 1250],
+  ["Canastitas", 1250],
+  ["Pizzetas", 1000],
+  ["Chips", 1125],
+  ["Fosforitos", 1125],
+  ["Albondiguitas", 1042],
+  ["Salchichitas envueltas", 750],
+  ["Medialunas j&q", 1292],
+  ["Morenitos", 1333],
+  ["Sang. de miga", 1750],
+  ["Sang. de pollo", 1333],
+  ["Sang. de milanesa", 1375],
+  ["Sang. de carne desmechada", 1375],
   ["Tortilla de papa", 9000],
 ];
+
+/* pasa una carta vieja (por docena) a precio por unidad */
+const aUnidad = (p) => {
+  if (p.unit) return p;
+  const trae = num((String(p.nombre).match(/^\s*(\d+)/) || [])[1]) || 1;
+  return {
+    id: p.id,
+    nombre: String(p.nombre).replace(/^\s*\d+\s*/, "") || p.nombre,
+    precio: Math.round(num(p.precio) / trae),
+    unit: true,
+  };
+};
 
 async function interpretar(contenido) {
   const res = await fetch("/api/claude", {
@@ -80,10 +93,10 @@ export default function MardelLunch() {
         const guardadoPrevio = localStorage.getItem(CLAVE);
         if (!guardadoPrevio) throw new Error("vacio");
         const d = JSON.parse(guardadoPrevio);
-        setProductos(d.productos || []);
+        setProductos((d.productos || []).map(aUnidad));
         setMovs(d.movs || []);
       } catch (e) {
-        setProductos(CARTA.map(([nombre, precio]) => ({ id: id(), nombre, precio })));
+        setProductos(CARTA.map(([nombre, precio]) => ({ id: id(), nombre, precio, unit: true })));
       }
       setCargando(false);
     })();
@@ -240,16 +253,26 @@ function Pedido({ productos, onGuardar }) {
           <div className={"ml-prod" + (cant[p.id] ? " activo" : "")} key={p.id}>
             <div className="ml-prod-txt">
               <strong>{p.nombre}</strong>
-              <span className="mono">{pesos(num(p.precio))}</span>
+              <span className="mono">{pesos(num(p.precio))} c/u</span>
             </div>
             <div className="ml-stepper">
               <button onClick={() => mover(p.id, -1)} disabled={!cant[p.id]} aria-label={"Quitar " + p.nombre}>−</button>
-              <span className="mono">{cant[p.id] || 0}</span>
+              <input
+                className="ml-cant mono"
+                type="number"
+                inputMode="numeric"
+                min="0"
+                value={cant[p.id] || ""}
+                placeholder="0"
+                onChange={(e) => setCant({ ...cant, [p.id]: Math.max(0, Math.round(num(e.target.value))) })}
+                aria-label={"Cantidad de " + p.nombre}
+              />
               <button onClick={() => mover(p.id, 1)} aria-label={"Agregar " + p.nombre}>+</button>
             </div>
           </div>
         ))}
       </div>
+      <p className="ml-nota">Tocá el número y escribí la cantidad que te pidieron: 18, 30, la que sea.</p>
 
       {total > 0 && (
         <div className="ml-cierre">
@@ -292,7 +315,14 @@ function Gasto({ onGuardar }) {
       setLectura(await interpretar(contenido));
       setEstado("");
     } catch (e) {
-      setEstado("No pude leerlo. Cargalo a mano abajo y listo.");
+      const m = String(e.message || "");
+      setEstado(
+        m.includes("ANTHROPIC_API_KEY")
+          ? "Falta cargar la API key en Vercel (Settings → Environment Variables) y hacer Redeploy."
+          : m.includes("credit") || m.includes("balance")
+          ? "La cuenta de la API se quedó sin saldo. Cargá crédito en console.anthropic.com."
+          : "No pude leerlo (" + (m || "sin conexión") + "). Cargalo a mano abajo."
+      );
     }
   };
 
@@ -418,6 +448,7 @@ function Precios({ productos, setProductos }) {
   const editar = (pid, campo, v) => setProductos(productos.map((p) => (p.id === pid ? { ...p, [campo]: v } : p)));
   return (
     <section className="ml-bloque">
+      <p className="ml-nota">Precio de UNA unidad. Una docena se cobra sola: 12 × el precio.</p>
       {productos.map((p) => (
         <div className="ml-precio" key={p.id}>
           <input className="ml-plano" value={p.nombre} onChange={(e) => editar(p.id, "nombre", e.target.value)} />
@@ -425,7 +456,7 @@ function Precios({ productos, setProductos }) {
           <button className="ml-x" onClick={() => setProductos(productos.filter((x) => x.id !== p.id))}>×</button>
         </div>
       ))}
-      <button className="ml-link" onClick={() => setProductos([...productos, { id: id(), nombre: "", precio: "" }])}>
+      <button className="ml-link" onClick={() => setProductos([...productos, { id: id(), nombre: "", precio: "", unit: true }])}>
         + Agregar producto
       </button>
     </section>
@@ -468,7 +499,7 @@ const CSS = `
 .ml-stepper{display:flex;align-items:center;gap:2px;flex:0 0 auto;}
 .ml-stepper button{width:40px;height:40px;border-radius:50%;border:1.5px solid var(--crema);background:#fff;color:var(--azul);font-size:22px;line-height:1;cursor:pointer;font-family:inherit;}
 .ml-stepper button:disabled{opacity:.3;}
-.ml-stepper span{min-width:26px;text-align:center;font-size:16px;font-weight:700;}
+.ml-cant{width:56px;text-align:center;font-size:17px;font-weight:700;border:1px solid var(--crema);border-radius:10px;padding:8px 2px;background:#fff;color:var(--azulOscuro);font-family:'Space Mono',monospace;}
 
 .ml-cierre{margin-top:14px;display:flex;flex-direction:column;gap:8px;}
 .ml-gasto{display:grid;grid-template-columns:1fr 118px;gap:8px;margin-bottom:8px;}
