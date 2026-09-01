@@ -125,6 +125,7 @@ export default function MardelLunch() {
     }
   }, [productos, movs, cargando]);
 
+  const mes = mesDe(fecha);
   const delMes = movs.filter((m) => mesDe(m.fecha) === mes);
   const filtrados = dia ? movs.filter((m) => m.fecha === dia) : delMes;
   const entro = filtrados.filter((m) => m.tipo === "pedido").reduce((a, m) => a + num(m.monto), 0);
@@ -135,8 +136,6 @@ export default function MardelLunch() {
 
   const editarMov = (mid, campo, v) => setMovs(movs.map((m) => (m.id === mid ? { ...m, [campo]: v } : m)));
 
-  // si mirás un mes viejo, lo que cargues cae en ese mes
-  const mes = mesDe(fecha);
   const elegirFecha = (f) => {
     if (!f) return;
     setFecha(f);
