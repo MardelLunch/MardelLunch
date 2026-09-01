@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
 /* ============================================================
    MARDEL LUNCH — una sola pantalla
@@ -83,6 +83,56 @@ async function interpretar(contenido) {
   return JSON.parse(i >= 0 ? l.slice(i, l.lastIndexOf("}") + 1) : l);
 }
 
+/* ==================== SINCRONIZACIÓN EN LA NUBE ====================
+   Los dos teléfonos guardan en la misma libreta. Cada movimiento
+   lleva la hora de su última edición: si dos editan lo mismo, queda
+   el más nuevo. Los borrados se recuerdan para que no reaparezcan.
+   ================================================================== */
+const CLAVE_LOCAL = "mardel-lunch:clave";
+
+async function hashear(texto) {
+  const datos = new TextEncoder().encode("mardel:" + texto.trim().toLowerCase());
+  const buf = await crypto.subtle.digest("SHA-256", datos);
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const nube = {
+  async leer(h) {
+    const r = await fetch("/api/datos?h=" + h);
+    if (!r.ok) throw new Error("nube");
+    return r.json();
+  },
+  async escribir(h, datos) {
+    const r = await fetch("/api/datos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ h, datos }),
+    });
+    if (!r.ok) throw new Error("nube");
+    return r.json();
+  },
+};
+
+function unir(a = {}, b = {}) {
+  const movs = new Map();
+  [...(a.movs || []), ...(b.movs || [])].forEach((m) => {
+    const previo = movs.get(m.id);
+    if (!previo || (m.t || 0) >= (previo.t || 0)) movs.set(m.id, m);
+  });
+  const borrados = { ...(a.borrados || {}), ...(b.borrados || {}) };
+  Object.entries(borrados).forEach(([mid, t]) => {
+    const m = movs.get(mid);
+    if (m && (m.t || 0) <= t) movs.delete(mid);
+  });
+  const mandaA = (a.productosT || 0) >= (b.productosT || 0);
+  return {
+    movs: [...movs.values()],
+    borrados,
+    productos: (mandaA ? a.productos : b.productos) || a.productos || b.productos || [],
+    productosT: Math.max(a.productosT || 0, b.productosT || 0),
+  };
+}
+
 /* ============================ APP ============================ */
 export default function MardelLunch() {
   const [productos, setProductos] = useState([]);
@@ -93,37 +143,94 @@ export default function MardelLunch() {
   const [fecha, setFecha] = useState(hoy()); // la fecha del formulario manda
   const [dia, setDia] = useState(hoy()); // qué se está mirando: un día o el mes entero
   const [guardado, setGuardado] = useState("");
+  const [borrados, setBorrados] = useState({});
+  const [productosT, setProductosT] = useState(0);
+  const [clave, setClave] = useState(null); // la clave compartida de la libreta
+  const [hash, setHash] = useState(null);
+  const [enNube, setEnNube] = useState("");
 
   useEffect(() => {
     // le pide al celular que no borre estos datos para hacer lugar
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   }, []);
 
+  const aplicar = (d) => {
+    setProductos((d.productos && d.productos.length ? d.productos : CARTA.map(([nombre, precio]) => ({ id: id(), nombre, precio, unit: true }))).map(aUnidad));
+    setMovs(d.movs || []);
+    setBorrados(d.borrados || {});
+    setProductosT(d.productosT || 0);
+  };
+
   useEffect(() => {
     (async () => {
+      let local = {};
       try {
-        const guardadoPrevio = localStorage.getItem(CLAVE);
-        if (!guardadoPrevio) throw new Error("vacio");
-        const d = JSON.parse(guardadoPrevio);
-        setProductos((d.productos || []).map(aUnidad));
-        setMovs(d.movs || []);
-      } catch (e) {
-        setProductos(CARTA.map(([nombre, precio]) => ({ id: id(), nombre, precio, unit: true })));
-      }
+        local = JSON.parse(localStorage.getItem(CLAVE)) || {};
+      } catch (e) {}
+      aplicar(local);
       setCargando(false);
+      try {
+        const guardada = localStorage.getItem(CLAVE_LOCAL);
+        if (guardada) setClave(guardada);
+      } catch (e) {}
     })();
   }, []);
+
+  // apenas hay clave, calcula su huella para hablar con la nube
+  useEffect(() => {
+    if (!clave) return;
+    hashear(clave).then(setHash);
+    try { localStorage.setItem(CLAVE_LOCAL, clave); } catch (e) {}
+  }, [clave]);
+
+  // la foto de los datos que usa la sincronización, sin reiniciar el reloj
+  const datosRef = useRef({});
+  datosRef.current = { movs, borrados, productos, productosT };
+  const ultimoRef = useRef("");
+  const ocupadoRef = useRef(false);
+
+  useEffect(() => {
+    if (!hash) return;
+    let vivo = true;
+
+    const sincronizar = async () => {
+      if (!vivo || ocupadoRef.current) return; // una por vez
+      ocupadoRef.current = true;
+      try {
+        const remoto = await nube.leer(hash);
+        const unido = unir(datosRef.current, (remoto && remoto.datos) || {});
+        const comoTexto = JSON.stringify(unido);
+        if (comoTexto !== JSON.stringify(datosRef.current)) aplicar(unido);
+        if (comoTexto !== ultimoRef.current) {
+          await nube.escribir(hash, unido); // solo si algo cambió
+          ultimoRef.current = comoTexto;
+        }
+        if (vivo) setEnNube("");
+      } catch (e) {
+        if (vivo) setEnNube("Sin conexión");
+      } finally {
+        ocupadoRef.current = false;
+      }
+    };
+
+    sincronizar();
+    const reloj = setInterval(sincronizar, 8000);
+    return () => {
+      vivo = false;
+      clearInterval(reloj);
+    };
+  }, [hash]);
 
   useEffect(() => {
     if (cargando) return;
     try {
-      localStorage.setItem(CLAVE, JSON.stringify({ productos, movs }));
+      localStorage.setItem(CLAVE, JSON.stringify({ productos, movs, borrados, productosT }));
       setGuardado("Guardado");
       setTimeout(() => setGuardado(""), 1600);
     } catch (e) {
       setGuardado("No se pudo guardar");
     }
-  }, [productos, movs, cargando]);
+  }, [productos, movs, borrados, productosT, cargando]);
 
   const mes = mesDe(fecha);
   const delMes = movs.filter((m) => mesDe(m.fecha) === mes);
@@ -132,9 +239,15 @@ export default function MardelLunch() {
   const salio = filtrados.filter((m) => m.tipo === "gasto").reduce((a, m) => a + num(m.monto), 0);
 
   const guardar = (movsNuevos) =>
-    setMovs([...movsNuevos.map((m) => ({ id: id(), ...m })), ...movs]);
+    setMovs([...movsNuevos.map((m) => ({ id: id(), t: Date.now(), ...m })), ...movs]);
 
-  const editarMov = (mid, campo, v) => setMovs(movs.map((m) => (m.id === mid ? { ...m, [campo]: v } : m)));
+  const editarMov = (mid, campo, v) =>
+    setMovs(movs.map((m) => (m.id === mid ? { ...m, [campo]: v, t: Date.now() } : m)));
+
+  const borrarMov = (mid) => {
+    setMovs(movs.filter((x) => x.id !== mid));
+    setBorrados({ ...borrados, [mid]: Date.now() });
+  };
 
   const elegirFecha = (f) => {
     if (!f) return;
@@ -148,6 +261,14 @@ export default function MardelLunch() {
   }, {});
   const dias = Object.keys(porDia).sort().reverse();
 
+  if (!cargando && !clave)
+    return (
+      <div className="ml-app">
+        <style>{CSS}</style>
+        <PedirClave onListo={setClave} />
+      </div>
+    );
+
   return (
     <div className="ml-app">
       <style>{CSS}</style>
@@ -156,7 +277,7 @@ export default function MardelLunch() {
         <div className="ml-logo">
           mardel<span className="ml-lunch">lunch</span>
         </div>
-        <div className="ml-mes">{guardado || nombreMes(mes)}</div>
+        <div className="ml-mes">{guardado || enNube || nombreMes(mes)}</div>
       </header>
 
       <div className="ml-tablero">
@@ -234,7 +355,7 @@ export default function MardelLunch() {
                               <button
                                 className="ml-borrar-todo"
                                 onClick={() => {
-                                  setMovs(movs.filter((x) => x.id !== m.id));
+                                  borrarMov(m.id);
                                   setEditando(null);
                                 }}
                               >
@@ -262,7 +383,15 @@ export default function MardelLunch() {
             <button className="ml-link" onClick={() => setVerPrecios(!verPrecios)}>
               {verPrecios ? "Listo" : "Mis precios"}
             </button>
-            {verPrecios && <Precios productos={productos} setProductos={setProductos} />}
+            {verPrecios && (
+              <Precios
+                productos={productos}
+                setProductos={(p) => {
+                  setProductos(p);
+                  setProductosT(Date.now());
+                }}
+              />
+            )}
 
             {movs.length > 0 && (
               <button
@@ -284,7 +413,11 @@ export default function MardelLunch() {
               <button
                 className="ml-borrar-todo"
                 onClick={() => {
-                  if (window.confirm("¿Borrar los " + movs.length + " movimientos cargados? No se puede deshacer. Bajá el Excel antes si querés guardarlos.")) setMovs([]);
+                  if (window.confirm("¿Borrar los " + movs.length + " movimientos cargados? No se puede deshacer. Bajá el Excel antes si querés guardarlos.")) {
+                    const ahora = Date.now();
+                    setBorrados({ ...borrados, ...Object.fromEntries(movs.map((m) => [m.id, ahora])) });
+                    setMovs([]);
+                  }
                 }}
               >
                 Borrar todo lo cargado
@@ -293,6 +426,34 @@ export default function MardelLunch() {
           </>
         )}
       </main>
+    </div>
+  );
+}
+
+/* -------------------------- LA CLAVE -------------------------- */
+function PedirClave({ onListo }) {
+  const [texto, setTexto] = useState("");
+  return (
+    <div className="ml-clave">
+      <div className="ml-logo grande">
+        mardel<span className="ml-lunch">lunch</span>
+      </div>
+      <p className="ml-clave-txt">
+        Escribí la clave de la libreta. Tiene que ser la misma en los dos teléfonos para ver lo mismo.
+      </p>
+      <input
+        className="ml-input"
+        value={texto}
+        onChange={(e) => setTexto(e.target.value)}
+        placeholder="Clave"
+        onKeyDown={(e) => e.key === "Enter" && texto.trim() && onListo(texto.trim())}
+      />
+      <button className="ml-cta ancho" onClick={() => texto.trim() && onListo(texto.trim())} disabled={!texto.trim()}>
+        Entrar
+      </button>
+      <p className="ml-clave-nota">
+        Si es la primera vez, inventá una y pasásela a quien vaya a cargar con vos. No se puede recuperar: anotala.
+      </p>
     </div>
   );
 }
@@ -621,5 +782,9 @@ const CSS = `
 .ml-lapiz{color:var(--humo);font-size:14px;text-align:center;}
 .ml-editar{background:var(--papel);border:1px solid var(--crema);border-radius:12px;padding:10px;margin:6px 0;display:flex;flex-direction:column;gap:8px;}
 .ml-editar .ml-gasto{margin-bottom:0;}
+.ml-clave{max-width:380px;margin:0 auto;padding:60px 24px;display:flex;flex-direction:column;gap:12px;text-align:center;}
+.ml-clave .ml-logo.grande{font-size:38px;color:var(--azul);font-family:Fraunces,Georgia,serif;font-weight:900;}
+.ml-clave-txt{font-size:15px;line-height:1.5;color:var(--azulOscuro);margin:0;}
+.ml-clave-nota{font-size:12.5px;color:var(--humo);line-height:1.45;margin:4px 0 0;}
 .ml-app :focus-visible{outline:2px solid var(--naranja);outline-offset:2px;}
 `;
