@@ -39,13 +39,18 @@ const CARTA = [
   ["Tortilla de papa", 9000],
 ];
 
+const conMayus = (t) => {
+  const x = String(t || "").trim();
+  return x ? x.charAt(0).toUpperCase() + x.slice(1) : x;
+};
+
 /* pasa una carta vieja (por docena) a precio por unidad */
 const aUnidad = (p) => {
   if (p.unit) return p;
   const trae = num((String(p.nombre).match(/^\s*(\d+)/) || [])[1]) || 1;
   return {
     id: p.id,
-    nombre: String(p.nombre).replace(/^\s*\d+\s*/, "") || p.nombre,
+    nombre: conMayus(String(p.nombre).replace(/^\s*\d+\s*/, "")) || conMayus(p.nombre),
     precio: Math.round(num(p.precio) / trae),
     unit: true,
   };
@@ -84,8 +89,13 @@ export default function MardelLunch() {
   const [movs, setMovs] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [verPrecios, setVerPrecios] = useState(false);
-  const [verTodo, setVerTodo] = useState(false);
+  const [mes, setMes] = useState(mesDe(hoy()));
   const [guardado, setGuardado] = useState("");
+
+  useEffect(() => {
+    // le pide al celular que no borre estos datos para hacer lugar
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -113,7 +123,6 @@ export default function MardelLunch() {
     }
   }, [productos, movs, cargando]);
 
-  const mes = mesDe(hoy());
   const delMes = movs.filter((m) => mesDe(m.fecha) === mes);
   const entro = delMes.filter((m) => m.tipo === "pedido").reduce((a, m) => a + num(m.monto), 0);
   const salio = delMes.filter((m) => m.tipo === "gasto").reduce((a, m) => a + num(m.monto), 0);
@@ -121,8 +130,18 @@ export default function MardelLunch() {
   const guardar = (movsNuevos) =>
     setMovs([...movsNuevos.map((m) => ({ id: id(), ...m })), ...movs]);
 
-  const visibles = verTodo ? movs : delMes;
-  const porDia = visibles.reduce((acc, m) => {
+  const moverMes = (d) => {
+    const [a, m] = mes.split("-").map(Number);
+    const f = new Date(a, m - 1 + d, 1);
+    setMes(f.getFullYear() + "-" + String(f.getMonth() + 1).padStart(2, "0"));
+  };
+  const esMesActual = mes === mesDe(hoy());
+  // si mirás un mes viejo, lo que cargues cae en ese mes
+  const fechaSugerida = esMesActual
+    ? hoy()
+    : mes + "-" + String(new Date(+mes.split("-")[0], +mes.split("-")[1], 0).getDate()).padStart(2, "0");
+
+  const porDia = delMes.reduce((acc, m) => {
     (acc[m.fecha] = acc[m.fecha] || []).push(m);
     return acc;
   }, {});
@@ -136,7 +155,11 @@ export default function MardelLunch() {
         <div className="ml-logo">
           mardel<span className="ml-lunch">lunch</span>
         </div>
-        <div className="ml-mes">{guardado || nombreMes(mes)}</div>
+        <div className="ml-navmes">
+          <button onClick={() => moverMes(-1)} aria-label="Mes anterior">‹</button>
+          <span>{guardado || nombreMes(mes) + " " + mes.slice(0, 4)}</span>
+          <button onClick={() => moverMes(1)} aria-label="Mes siguiente">›</button>
+        </div>
       </header>
 
       <div className="ml-tablero">
@@ -159,17 +182,24 @@ export default function MardelLunch() {
           <p className="ml-vacio">Un segundito…</p>
         ) : (
           <>
-            <Pedido productos={productos} onGuardar={guardar} />
-            <Gasto onGuardar={guardar} />
+            {delMes.length === 0 && movs.length > 0 && (
+              <div className="ml-cartel">
+                No hay nada cargado en {nombreMes(mes)}. Con las flechitas de arriba te movés de mes.
+              </div>
+            )}
 
-            {movs.length > 0 && (
+            {!esMesActual && (
+              <div className="ml-cartel">
+                Estás en {nombreMes(mes)}. Lo que cargues ahora se va a guardar en ese mes.
+              </div>
+            )}
+
+            <Pedido productos={productos} onGuardar={guardar} fechaSugerida={fechaSugerida} />
+            <Gasto onGuardar={guardar} fechaSugerida={fechaSugerida} />
+
+            {delMes.length > 0 && (
               <section className="ml-bloque">
-                <div className="ml-fila-h2">
-                  <h2 className="ml-h2">{verTodo ? "Todo" : "Este mes"}</h2>
-                  <button className="ml-link" onClick={() => setVerTodo(!verTodo)}>
-                    {verTodo ? "Ver solo el mes" : "Ver todo"}
-                  </button>
-                </div>
+                <h2 className="ml-h2">{nombreMes(mes)}</h2>
                 {dias.map((f) => {
                   const total = porDia[f].reduce((a, m) => a + (m.tipo === "gasto" ? -num(m.monto) : num(m.monto)), 0);
                   return (
@@ -214,6 +244,17 @@ export default function MardelLunch() {
                 Bajar todo en Excel
               </button>
             )}
+
+            {movs.length > 0 && (
+              <button
+                className="ml-borrar-todo"
+                onClick={() => {
+                  if (window.confirm("¿Borrar los " + movs.length + " movimientos cargados? No se puede deshacer. Bajá el Excel antes si querés guardarlos.")) setMovs([]);
+                }}
+              >
+                Borrar todo lo cargado
+              </button>
+            )}
           </>
         )}
       </main>
@@ -222,10 +263,11 @@ export default function MardelLunch() {
 }
 
 /* ------------------------- EL PEDIDO ------------------------- */
-function Pedido({ productos, onGuardar }) {
+function Pedido({ productos, onGuardar, fechaSugerida }) {
   const [cant, setCant] = useState({});
   const [cliente, setCliente] = useState("");
-  const [fecha, setFecha] = useState(hoy());
+  const [fecha, setFecha] = useState(fechaSugerida);
+  useEffect(() => setFecha(fechaSugerida), [fechaSugerida]);
 
   const total = productos.reduce((a, p) => a + num(p.precio) * (cant[p.id] || 0), 0);
   const elegidos = productos.filter((p) => cant[p.id]);
@@ -252,7 +294,7 @@ function Pedido({ productos, onGuardar }) {
         {productos.map((p) => (
           <div className={"ml-prod" + (cant[p.id] ? " activo" : "")} key={p.id}>
             <div className="ml-prod-txt">
-              <strong>{p.nombre}</strong>
+              <strong>{conMayus(p.nombre)}</strong>
               <span className="mono">{pesos(num(p.precio))} c/u</span>
             </div>
             <div className="ml-stepper">
@@ -290,10 +332,11 @@ function Pedido({ productos, onGuardar }) {
 }
 
 /* -------------------------- EL GASTO -------------------------- */
-function Gasto({ onGuardar }) {
+function Gasto({ onGuardar, fechaSugerida }) {
   const [detalle, setDetalle] = useState("");
   const [monto, setMonto] = useState("");
-  const [fecha, setFecha] = useState(hoy());
+  const [fecha, setFecha] = useState(fechaSugerida);
+  useEffect(() => setFecha(fechaSugerida), [fechaSugerida]);
   const [estado, setEstado] = useState("");
   const [lectura, setLectura] = useState(null);
   const [texto, setTexto] = useState("");
@@ -451,7 +494,7 @@ function Precios({ productos, setProductos }) {
       <p className="ml-nota">Precio de UNA unidad. Una docena se cobra sola: 12 × el precio.</p>
       {productos.map((p) => (
         <div className="ml-precio" key={p.id}>
-          <input className="ml-plano" value={p.nombre} onChange={(e) => editar(p.id, "nombre", e.target.value)} />
+          <input className="ml-plano" value={p.nombre} onChange={(e) => editar(p.id, "nombre", conMayus(e.target.value))} />
           <input className="ml-plano mono corto" type="number" value={p.precio} onChange={(e) => editar(p.id, "precio", e.target.value)} />
           <button className="ml-x" onClick={() => setProductos(productos.filter((x) => x.id !== p.id))}>×</button>
         </div>
@@ -541,5 +584,11 @@ const CSS = `
 @keyframes mlPulso{0%,100%{opacity:1;}50%{opacity:.7;}}
 .ml-input.area{resize:vertical;line-height:1.45;margin-bottom:8px;}
 .ml-row.separado{margin-top:12px;}
+.ml-cartel{background:#fff;border-left:4px solid var(--naranja);border-radius:0 12px 12px 0;padding:12px 14px;font-size:14px;line-height:1.5;}
+.ml-cartel .ml-link{padding:0;font-size:14px;}
+.ml-borrar-todo{background:none;border:0;color:#C7452F;font-family:inherit;font-size:13px;cursor:pointer;padding:10px;align-self:center;}
+.ml-navmes{display:flex;align-items:center;gap:4px;font-family:'Space Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--naranjaSuave);}
+.ml-navmes button{background:rgba(255,255,255,.12);border:0;color:#fff;width:30px;height:30px;border-radius:50%;font-size:17px;line-height:1;cursor:pointer;}
+.ml-navmes span{min-width:112px;text-align:center;}
 .ml-app :focus-visible{outline:2px solid var(--naranja);outline-offset:2px;}
 `;
