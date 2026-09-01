@@ -89,8 +89,15 @@ export default function MardelLunch() {
   const [movs, setMovs] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [verPrecios, setVerPrecios] = useState(false);
-  const [verTodo, setVerTodo] = useState(false);
+  const [mes, setMes] = useState(mesDe(hoy()));
+  const [editando, setEditando] = useState(null);
+  const [dia, setDia] = useState(null); // si elegís un día, todo muestra ese día
   const [guardado, setGuardado] = useState("");
+
+  useEffect(() => {
+    // le pide al celular que no borre estos datos para hacer lugar
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -118,16 +125,28 @@ export default function MardelLunch() {
     }
   }, [productos, movs, cargando]);
 
-  const mes = mesDe(hoy());
   const delMes = movs.filter((m) => mesDe(m.fecha) === mes);
-  const entro = delMes.filter((m) => m.tipo === "pedido").reduce((a, m) => a + num(m.monto), 0);
-  const salio = delMes.filter((m) => m.tipo === "gasto").reduce((a, m) => a + num(m.monto), 0);
+  const filtrados = dia ? movs.filter((m) => m.fecha === dia) : delMes;
+  const entro = filtrados.filter((m) => m.tipo === "pedido").reduce((a, m) => a + num(m.monto), 0);
+  const salio = filtrados.filter((m) => m.tipo === "gasto").reduce((a, m) => a + num(m.monto), 0);
 
   const guardar = (movsNuevos) =>
     setMovs([...movsNuevos.map((m) => ({ id: id(), ...m })), ...movs]);
 
-  const visibles = verTodo ? movs : delMes;
-  const porDia = visibles.reduce((acc, m) => {
+  const editarMov = (mid, campo, v) => setMovs(movs.map((m) => (m.id === mid ? { ...m, [campo]: v } : m)));
+
+  const moverMes = (d) => {
+    setDia(null);
+    const [a, m] = mes.split("-").map(Number);
+    const f = new Date(a, m - 1 + d, 1);
+    setMes(f.getFullYear() + "-" + String(f.getMonth() + 1).padStart(2, "0"));
+  };
+  const esMesActual = mes === mesDe(hoy());
+  // si mirás un mes viejo, lo que cargues cae en ese mes
+  const fechaSugerida =
+    dia || (esMesActual ? hoy() : mes + "-" + String(new Date(+mes.split("-")[0], +mes.split("-")[1], 0).getDate()).padStart(2, "0"));
+
+  const porDia = filtrados.reduce((acc, m) => {
     (acc[m.fecha] = acc[m.fecha] || []).push(m);
     return acc;
   }, {});
@@ -141,7 +160,11 @@ export default function MardelLunch() {
         <div className="ml-logo">
           mardel<span className="ml-lunch">lunch</span>
         </div>
-        <div className="ml-mes">{guardado || nombreMes(mes)}</div>
+        <div className="ml-navmes">
+          <button onClick={() => moverMes(-1)} aria-label="Mes anterior">‹</button>
+          <span>{guardado || nombreMes(mes) + " " + mes.slice(0, 4)}</span>
+          <button onClick={() => moverMes(1)} aria-label="Mes siguiente">›</button>
+        </div>
       </header>
 
       <div className="ml-tablero">
@@ -159,22 +182,49 @@ export default function MardelLunch() {
         </div>
       </div>
 
+      <div className="ml-filtro">
+        <input
+          className="ml-fecha-filtro"
+          type="date"
+          value={dia || ""}
+          onChange={(e) => {
+            const v = e.target.value;
+            setDia(v || null);
+            if (v) setMes(mesDe(v));
+          }}
+        />
+        {dia ? (
+          <button className="ml-link" onClick={() => setDia(null)}>Ver el mes entero</button>
+        ) : (
+          <span className="ml-nota chico">Elegí un día para ver solo ese día</span>
+        )}
+      </div>
+
       <main className="ml-main">
         {cargando ? (
           <p className="ml-vacio">Un segundito…</p>
         ) : (
           <>
-            <Pedido productos={productos} onGuardar={guardar} />
-            <Gasto onGuardar={guardar} />
+            {filtrados.length === 0 && movs.length > 0 && (
+              <div className="ml-cartel">
+                No hay nada cargado en {dia ? tituloDia(dia).toLowerCase() : nombreMes(mes)}.
+                {dia ? " Tocá “Ver el mes entero” para volver." : " Con las flechitas de arriba te movés de mes."}
+              </div>
+            )}
 
-            {movs.length > 0 && (
+            {!esMesActual && (
+              <div className="ml-cartel">
+                Estás en {nombreMes(mes)}. Lo que cargues ahora se va a guardar en ese mes.
+              </div>
+            )}
+
+            <Pedido productos={productos} onGuardar={guardar} fechaSugerida={fechaSugerida} />
+            <Gasto onGuardar={guardar} fechaSugerida={fechaSugerida} />
+
+            {filtrados.length > 0 && (
               <section className="ml-bloque">
-                <div className="ml-fila-h2">
-                  <h2 className="ml-h2">{verTodo ? "Todo" : "Este mes"}</h2>
-                  <button className="ml-link" onClick={() => setVerTodo(!verTodo)}>
-                    {verTodo ? "Ver solo el mes" : "Ver todo"}
-                  </button>
-                </div>
+                <h2 className="ml-h2">{dia ? tituloDia(dia) : nombreMes(mes)}</h2>
+                <p className="ml-nota">Tocá cualquier renglón para corregirlo o borrarlo.</p>
                 {dias.map((f) => {
                   const total = porDia[f].reduce((a, m) => a + (m.tipo === "gasto" ? -num(m.monto) : num(m.monto)), 0);
                   return (
@@ -183,16 +233,54 @@ export default function MardelLunch() {
                         <span>{tituloDia(f)}</span>
                         <span className={"mono " + (total >= 0 ? "verde" : "rojo")}>{pesos(total)}</span>
                       </div>
-                      {porDia[f].map((m) => (
-                        <div className="ml-mov" key={m.id}>
-                          <span className="ml-detalle">{m.detalle}</span>
-                          <span className={"mono ml-monto " + m.tipo}>
-                            {m.tipo === "gasto" ? "−" : "+"}
-                            {pesos(num(m.monto))}
-                          </span>
-                          <button className="ml-x" onClick={() => setMovs(movs.filter((x) => x.id !== m.id))}>×</button>
-                        </div>
-                      ))}
+                      {porDia[f].map((m) =>
+                        editando === m.id ? (
+                          <div className="ml-editar" key={m.id}>
+                            <input
+                              className="ml-input"
+                              value={m.detalle}
+                              onChange={(e) => editarMov(m.id, "detalle", e.target.value)}
+                              placeholder="Qué fue"
+                            />
+                            <div className="ml-gasto">
+                              <input
+                                className="ml-input mono"
+                                type="number"
+                                inputMode="numeric"
+                                value={m.monto}
+                                onChange={(e) => editarMov(m.id, "monto", e.target.value)}
+                              />
+                              <input
+                                className="ml-input"
+                                type="date"
+                                value={m.fecha}
+                                onChange={(e) => editarMov(m.id, "fecha", e.target.value)}
+                              />
+                            </div>
+                            <div className="ml-row">
+                              <button className="ml-cta" onClick={() => setEditando(null)}>Listo</button>
+                              <button
+                                className="ml-borrar-todo"
+                                onClick={() => {
+                                  setMovs(movs.filter((x) => x.id !== m.id));
+                                  setEditando(null);
+                                }}
+                              >
+                                Borrar este
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="ml-mov editable" key={m.id} onClick={() => setEditando(m.id)}>
+                            <span className="ml-detalle">{m.detalle}</span>
+                            <span className={"mono ml-monto " + m.tipo}>
+                              {m.tipo === "gasto" ? "−" : "+"}
+                              {pesos(num(m.monto))}
+                            </span>
+                            <span className="ml-lapiz">✎</span>
+                          </div>
+                        )
+                      )}
                     </div>
                   );
                 })}
@@ -219,6 +307,17 @@ export default function MardelLunch() {
                 Bajar todo en Excel
               </button>
             )}
+
+            {movs.length > 0 && (
+              <button
+                className="ml-borrar-todo"
+                onClick={() => {
+                  if (window.confirm("¿Borrar los " + movs.length + " movimientos cargados? No se puede deshacer. Bajá el Excel antes si querés guardarlos.")) setMovs([]);
+                }}
+              >
+                Borrar todo lo cargado
+              </button>
+            )}
           </>
         )}
       </main>
@@ -227,10 +326,11 @@ export default function MardelLunch() {
 }
 
 /* ------------------------- EL PEDIDO ------------------------- */
-function Pedido({ productos, onGuardar }) {
+function Pedido({ productos, onGuardar, fechaSugerida }) {
   const [cant, setCant] = useState({});
   const [cliente, setCliente] = useState("");
-  const [fecha, setFecha] = useState(hoy());
+  const [fecha, setFecha] = useState(fechaSugerida);
+  useEffect(() => setFecha(fechaSugerida), [fechaSugerida]);
 
   const total = productos.reduce((a, p) => a + num(p.precio) * (cant[p.id] || 0), 0);
   const elegidos = productos.filter((p) => cant[p.id]);
@@ -295,10 +395,11 @@ function Pedido({ productos, onGuardar }) {
 }
 
 /* -------------------------- EL GASTO -------------------------- */
-function Gasto({ onGuardar }) {
+function Gasto({ onGuardar, fechaSugerida }) {
   const [detalle, setDetalle] = useState("");
   const [monto, setMonto] = useState("");
-  const [fecha, setFecha] = useState(hoy());
+  const [fecha, setFecha] = useState(fechaSugerida);
+  useEffect(() => setFecha(fechaSugerida), [fechaSugerida]);
   const [estado, setEstado] = useState("");
   const [lectura, setLectura] = useState(null);
   const [texto, setTexto] = useState("");
@@ -546,5 +647,19 @@ const CSS = `
 @keyframes mlPulso{0%,100%{opacity:1;}50%{opacity:.7;}}
 .ml-input.area{resize:vertical;line-height:1.45;margin-bottom:8px;}
 .ml-row.separado{margin-top:12px;}
+.ml-cartel{background:#fff;border-left:4px solid var(--naranja);border-radius:0 12px 12px 0;padding:12px 14px;font-size:14px;line-height:1.5;}
+.ml-cartel .ml-link{padding:0;font-size:14px;}
+.ml-borrar-todo{background:none;border:0;color:#C7452F;font-family:inherit;font-size:13px;cursor:pointer;padding:10px;align-self:center;}
+.ml-navmes{display:flex;align-items:center;gap:4px;font-family:'Space Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--naranjaSuave);}
+.ml-navmes button{background:rgba(255,255,255,.12);border:0;color:#fff;width:30px;height:30px;border-radius:50%;font-size:17px;line-height:1;cursor:pointer;}
+.ml-navmes span{min-width:112px;text-align:center;}
+.ml-mov.editable{cursor:pointer;}
+.ml-lapiz{color:var(--humo);font-size:14px;text-align:center;}
+.ml-editar{background:var(--papel);border:1px solid var(--crema);border-radius:12px;padding:10px;margin:6px 0;display:flex;flex-direction:column;gap:8px;}
+.ml-editar .ml-gasto{margin-bottom:0;}
+.ml-filtro{display:flex;align-items:center;gap:10px;justify-content:center;flex-wrap:wrap;padding:10px 14px;background:var(--azulOscuro);}
+.ml-fecha-filtro{font-family:inherit;font-size:14px;padding:7px 10px;border:0;border-radius:10px;background:rgba(255,255,255,.14);color:#fff;}
+.ml-filtro .ml-link{color:#fff;padding:0;}
+.ml-nota.chico{margin:0;font-size:12px;color:#B9CBE8;}
 .ml-app :focus-visible{outline:2px solid var(--naranja);outline-offset:2px;}
 `;
