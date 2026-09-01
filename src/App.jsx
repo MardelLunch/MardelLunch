@@ -89,7 +89,6 @@ export default function MardelLunch() {
   const [movs, setMovs] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [verPrecios, setVerPrecios] = useState(false);
-  const [mes, setMes] = useState(mesDe(hoy()));
   const [editando, setEditando] = useState(null);
   const [fecha, setFecha] = useState(hoy()); // la fecha del formulario manda
   const [dia, setDia] = useState(hoy()); // qué se está mirando: un día o el mes entero
@@ -136,19 +135,12 @@ export default function MardelLunch() {
 
   const editarMov = (mid, campo, v) => setMovs(movs.map((m) => (m.id === mid ? { ...m, [campo]: v } : m)));
 
-  const moverMes = (d) => {
-    setDia(null); // las flechas muestran el mes completo
-    const [a, m] = mes.split("-").map(Number);
-    const f = new Date(a, m - 1 + d, 1);
-    setMes(f.getFullYear() + "-" + String(f.getMonth() + 1).padStart(2, "0"));
-  };
-  const esMesActual = mes === mesDe(hoy());
   // si mirás un mes viejo, lo que cargues cae en ese mes
+  const mes = mesDe(fecha);
   const elegirFecha = (f) => {
     if (!f) return;
     setFecha(f);
-    setDia(f);
-    setMes(mesDe(f));
+    if (dia) setDia(f);
   };
 
   const porDia = filtrados.reduce((acc, m) => {
@@ -165,11 +157,7 @@ export default function MardelLunch() {
         <div className="ml-logo">
           mardel<span className="ml-lunch">lunch</span>
         </div>
-        <div className="ml-navmes">
-          <button onClick={() => moverMes(-1)} aria-label="Mes anterior">‹</button>
-          <span>{guardado || nombreMes(mes) + " " + mes.slice(0, 4)}</span>
-          <button onClick={() => moverMes(1)} aria-label="Mes siguiente">›</button>
-        </div>
+        <div className="ml-mes">{guardado || nombreMes(mes)}</div>
       </header>
 
       <div className="ml-tablero">
@@ -194,14 +182,7 @@ export default function MardelLunch() {
           <>
             {filtrados.length === 0 && movs.length > 0 && (
               <div className="ml-cartel">
-                No hay nada cargado en {dia ? tituloDia(dia).toLowerCase() : nombreMes(mes)}. Cambiá la fecha acá abajo o
-                movete de mes con las flechitas de arriba.
-              </div>
-            )}
-
-            {!esMesActual && (
-              <div className="ml-cartel">
-                Estás en {nombreMes(mes)}. Lo que cargues ahora se va a guardar en ese mes.
+                No hay nada cargado en {dia ? tituloDia(dia).toLowerCase() : nombreMes(mes)}. Cambiá la fecha acá abajo.
               </div>
             )}
 
@@ -212,9 +193,9 @@ export default function MardelLunch() {
               <section className="ml-bloque">
                 <div className="ml-fila-h2">
                   <h2 className="ml-h2">{dia ? tituloDia(dia) : nombreMes(mes)}</h2>
-                  {dia && (
-                    <button className="ml-link" onClick={() => setDia(null)}>Ver el mes entero</button>
-                  )}
+                  <button className="ml-link" onClick={() => setDia(dia ? null : fecha)}>
+                    {dia ? "Ver el mes entero" : "Ver solo ese día"}
+                  </button>
                 </div>
                 <p className="ml-nota">Tocá cualquier renglón para corregirlo o borrarlo.</p>
                 {dias.map((f) => {
@@ -637,9 +618,6 @@ const CSS = `
 .ml-cartel{background:#fff;border-left:4px solid var(--naranja);border-radius:0 12px 12px 0;padding:12px 14px;font-size:14px;line-height:1.5;}
 .ml-cartel .ml-link{padding:0;font-size:14px;}
 .ml-borrar-todo{background:none;border:0;color:#C7452F;font-family:inherit;font-size:13px;cursor:pointer;padding:10px;align-self:center;}
-.ml-navmes{display:flex;align-items:center;gap:4px;font-family:'Space Mono',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--naranjaSuave);}
-.ml-navmes button{background:rgba(255,255,255,.12);border:0;color:#fff;width:30px;height:30px;border-radius:50%;font-size:17px;line-height:1;cursor:pointer;}
-.ml-navmes span{min-width:112px;text-align:center;}
 .ml-mov.editable{cursor:pointer;}
 .ml-lapiz{color:var(--humo);font-size:14px;text-align:center;}
 .ml-editar{background:var(--papel);border:1px solid var(--crema);border-radius:12px;padding:10px;margin:6px 0;display:flex;flex-direction:column;gap:8px;}
