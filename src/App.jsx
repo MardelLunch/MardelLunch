@@ -21,23 +21,46 @@ const tituloDia = (f) => {
   return dias[d.getDay()] + " " + f.slice(8, 10) + "/" + f.slice(5, 7);
 };
 
-/* precios POR UNIDAD */
+/* precios POR UNIDAD (la docena dividida por 12) */
 const CARTA = [
   ["Empanadas", 1250],
   ["Canastitas", 1250],
   ["Pizzetas", 1000],
   ["Chips", 1125],
   ["Fosforitos", 1125],
-  ["Albondiguitas", 1042],
+  ["Albondiguitas", 1125],
   ["Salchichitas envueltas", 750],
-  ["Medialunas j&q", 1292],
-  ["Morenitos", 1333],
+  ["Medialunas j&q", 1375],
+  ["Morenitos", 1375],
   ["Sang. de miga", 1750],
-  ["Sang. de pollo", 1333],
+  ["Sang. de pollo", 1375],
   ["Sang. de milanesa", 1375],
   ["Sang. de carne desmechada", 1375],
   ["Tortilla de papa", 9000],
 ];
+
+/* lista de precios de septiembre: se aplica sola una vez */
+const PRECIOS_V = 2;
+const PRECIOS_NUEVOS = [
+  [["pollo"], 1375],
+  [["medialuna"], 1375],
+  [["albondiguita"], 1125],
+  [["morenito"], 1375],
+  [["desmechada"], 1375],
+  [["tortilla"], 9000],
+  [["chip"], 1125],
+  [["canastita"], 1250],
+  [["empanada"], 1250],
+  [["milanesa"], 1375],
+  [["fosforito"], 1125],
+  [["salchichita"], 750],
+  [["pizzeta"], 1000],
+];
+const actualizarPrecios = (productos) =>
+  productos.map((p) => {
+    const fila = PRECIOS_NUEVOS.find(([claves]) => claves.some((k) => String(p.nombre).toLowerCase().includes(k)));
+    return fila ? { ...p, precio: fila[1] } : p;
+  });
 
 const conMayus = (t) => {
   const x = String(t || "").trim();
@@ -130,7 +153,71 @@ function unir(a = {}, b = {}) {
     borrados,
     productos: (mandaA ? a.productos : b.productos) || a.productos || b.productos || [],
     productosT: Math.max(a.productosT || 0, b.productosT || 0),
+    preciosV: Math.max(a.preciosV || 0, b.preciosV || 0),
   };
+}
+
+/* ==================== ARMADOR DE PEDIDOS ====================
+   Con la cantidad de gente calcula los bocados y reparte entre
+   los productos, redondeando a medias docenas para que sea real.
+   ============================================================ */
+const ESTILOS = [
+  ["Variado", "Seis cosas distintas", 6],
+  ["Bien surtido", "Ocho variedades, salado y dulce", 8],
+  ["De todo un poco", "La mesa completa", 11],
+];
+
+const aMediaDocena = (n) => Math.max(6, Math.round(n / 6) * 6);
+
+/* mezcla al azar, pero empanadas y pizzetas entran casi siempre */
+function mezclar(productos) {
+  return productos
+    .map((p) => {
+      const infaltable = /empanada|pizzeta/i.test(p.nombre) ? 0.45 : 1;
+      const dulce = /medialuna|morenito/i.test(p.nombre) ? 1.15 : 1;
+      return [Math.random() * infaltable * dulce, p];
+    })
+    .sort((a, b) => a[0] - b[0])
+    .map(([, p]) => p);
+}
+
+function armarOpciones(productos, personas, porPersona) {
+  const objetivo = Math.max(6, Math.round(num(personas) * num(porPersona)));
+  const usables = productos.filter((p) => num(p.precio) > 0 && !/tortilla/i.test(p.nombre));
+  if (!usables.length) return [];
+
+  return ESTILOS.map(([nombre, pie, cuantos]) => {
+    const elegidos = mezclar(usables).slice(0, Math.min(cuantos, usables.length));
+
+    // pesos al azar: algunos productos salen más que otros, distinto en cada tirada
+    const pesos = elegidos.map((p) => (/empanada|pizzeta/i.test(p.nombre) ? 1.4 : 1) * (0.7 + Math.random() * 0.7));
+    const suma = pesos.reduce((a, x) => a + x, 0);
+
+    const items = elegidos.map((p, i) => ({
+      producto: p,
+      cant: aMediaDocena((objetivo * pesos[i]) / suma),
+    }));
+
+    let total = items.reduce((a, i) => a + i.cant, 0);
+    let vueltas = 0;
+    while (total > objetivo * 1.1 && vueltas < 60) {
+      const mayor = items.filter((i) => i.cant > 6).sort((a, b) => b.cant - a.cant)[0];
+      if (!mayor) break;
+      mayor.cant -= 6;
+      total -= 6;
+      vueltas++;
+    }
+    while (total < objetivo * 0.9 && vueltas < 120) {
+      const menor = items.slice().sort((a, b) => a.cant - b.cant)[0];
+      menor.cant += 6;
+      total += 6;
+      vueltas++;
+    }
+
+    items.sort((a, b) => b.cant - a.cant);
+    const precio = items.reduce((a, i) => a + i.cant * num(i.producto.precio), 0);
+    return { nombre, pie, items, bocados: total, precio, personas: num(personas) };
+  });
 }
 
 /* ============================ APP ============================ */
@@ -145,6 +232,7 @@ export default function MardelLunch() {
   const [guardado, setGuardado] = useState("");
   const [borrados, setBorrados] = useState({});
   const [productosT, setProductosT] = useState(0);
+  const [preciosV, setPreciosV] = useState(0);
   const [clave, setClave] = useState(null); // la clave compartida de la libreta
   const [hash, setHash] = useState(null);
   const [enNube, setEnNube] = useState("");
@@ -155,10 +243,22 @@ export default function MardelLunch() {
   }, []);
 
   const aplicar = (d) => {
-    setProductos((d.productos && d.productos.length ? d.productos : CARTA.map(([nombre, precio]) => ({ id: id(), nombre, precio, unit: true }))).map(aUnidad));
+    let prods = (d.productos && d.productos.length
+      ? d.productos
+      : CARTA.map(([nombre, precio]) => ({ id: id(), nombre, precio, unit: true }))
+    ).map(aUnidad);
+    let version = d.preciosV || 0;
+    let marca = d.productosT || 0;
+    if (version < PRECIOS_V) {
+      prods = actualizarPrecios(prods);
+      version = PRECIOS_V;
+      marca = Date.now();
+    }
+    setProductos(prods);
     setMovs(d.movs || []);
     setBorrados(d.borrados || {});
-    setProductosT(d.productosT || 0);
+    setProductosT(marca);
+    setPreciosV(version);
   };
 
   useEffect(() => {
@@ -185,7 +285,7 @@ export default function MardelLunch() {
 
   // la foto de los datos que usa la sincronización, sin reiniciar el reloj
   const datosRef = useRef({});
-  datosRef.current = { movs, borrados, productos, productosT };
+  datosRef.current = { movs, borrados, productos, productosT, preciosV };
   const ultimoRef = useRef("");
   const ocupadoRef = useRef(false);
 
@@ -224,13 +324,13 @@ export default function MardelLunch() {
   useEffect(() => {
     if (cargando) return;
     try {
-      localStorage.setItem(CLAVE, JSON.stringify({ productos, movs, borrados, productosT }));
+      localStorage.setItem(CLAVE, JSON.stringify({ productos, movs, borrados, productosT, preciosV }));
       setGuardado("Guardado");
       setTimeout(() => setGuardado(""), 1600);
     } catch (e) {
       setGuardado("No se pudo guardar");
     }
-  }, [productos, movs, borrados, productosT, cargando]);
+  }, [productos, movs, borrados, productosT, preciosV, cargando]);
 
   const mes = mesDe(fecha);
   const delMes = movs.filter((m) => mesDe(m.fecha) === mes);
@@ -484,6 +584,9 @@ function Pedido({ productos, onGuardar, fecha, setFecha }) {
   return (
     <section className="ml-bloque">
       <h2 className="ml-h2">Anotar un pedido</h2>
+
+      <Armador productos={productos} onUsar={setCant} />
+
       <div className="ml-lista">
         {productos.map((p) => (
           <div className={"ml-prod" + (cant[p.id] ? " activo" : "")} key={p.id}>
@@ -521,6 +624,81 @@ function Pedido({ productos, onGuardar, fecha, setFecha }) {
         </div>
       )}
     </section>
+  );
+}
+
+/* ------------------------- EL ARMADOR ------------------------- */
+function Armador({ productos, onUsar }) {
+  const [personas, setPersonas] = useState("");
+  const [porPersona, setPorPersona] = useState(8);
+  const [opciones, setOpciones] = useState(null);
+
+  const armar = () => {
+    if (!num(personas)) return;
+    setOpciones(armarOpciones(productos, personas, porPersona));
+  };
+
+  return (
+    <div className="ml-armador">
+      <div className="ml-armar-fila">
+        <input
+          className="ml-input"
+          type="number"
+          inputMode="numeric"
+          placeholder="¿Para cuántos?"
+          value={personas}
+          onChange={(e) => setPersonas(e.target.value)}
+        />
+        <select className="ml-input" value={porPersona} onChange={(e) => setPorPersona(num(e.target.value))}>
+          <option value={6}>6 c/u</option>
+          <option value={8}>8 c/u</option>
+          <option value={10}>10 c/u</option>
+        </select>
+        <button className="ml-cta" onClick={armar} disabled={!num(personas)}>{opciones ? "Otras" : "Armar"}</button>
+      </div>
+
+      {opciones && opciones.length === 0 && <p className="ml-nota">No pude armarlo con los productos cargados.</p>}
+      {opciones && opciones.length > 0 && (
+        <p className="ml-nota">Si no te convencen, tocá "Otras" y te arma tres combinaciones nuevas.</p>
+      )}
+
+      {opciones &&
+        opciones.map((o) => (
+          <div className="ml-opcion" key={o.nombre}>
+            <div className="ml-opcion-top">
+              <div>
+                <strong>{o.nombre}</strong>
+                <div className="ml-costo">{o.pie}</div>
+              </div>
+              <span className="mono ml-opcion-precio">{pesos(o.precio)}</span>
+            </div>
+            {o.items.map((i) => (
+              <div className="ml-linea oscura" key={i.producto.id}>
+                <span>
+                  <em className="mono">{i.cant}</em> {conMayus(i.producto.nombre)}
+                </span>
+                <span className="ml-punteado" />
+                <span className="mono">{pesos(i.cant * num(i.producto.precio))}</span>
+              </div>
+            ))}
+            <div className="ml-costo">
+              {o.bocados} bocados · {Math.round(o.bocados / o.personas)} por persona ·{" "}
+              {pesos(o.precio / o.personas)} c/u
+            </div>
+            <button
+              className="ml-ghost"
+              onClick={() => {
+                const nuevo = {};
+                o.items.forEach((i) => (nuevo[i.producto.id] = i.cant));
+                onUsar(nuevo);
+                setOpciones(null);
+              }}
+            >
+              Usar este
+            </button>
+          </div>
+        ))}
+    </div>
   );
 }
 
@@ -786,5 +964,13 @@ const CSS = `
 .ml-clave .ml-logo.grande{font-size:38px;color:var(--azul);font-family:Fraunces,Georgia,serif;font-weight:900;}
 .ml-clave-txt{font-size:15px;line-height:1.5;color:var(--azulOscuro);margin:0;}
 .ml-clave-nota{font-size:12.5px;color:var(--humo);line-height:1.45;margin:4px 0 0;}
+.ml-armador{margin-bottom:14px;}
+.ml-armar-fila{display:grid;grid-template-columns:1fr 96px auto;gap:6px;align-items:center;}
+.ml-armar-fila .ml-input{margin:0;}
+.ml-opcion{background:var(--papel);border:1px solid var(--crema);border-radius:14px;padding:12px;margin-top:10px;display:flex;flex-direction:column;gap:4px;}
+.ml-opcion-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px;}
+.ml-opcion-precio{font-size:16px;font-weight:700;color:var(--azul);}
+.ml-opcion .ml-costo{margin-top:6px;}
+.ml-opcion .ml-ghost{margin-top:8px;}
 .ml-app :focus-visible{outline:2px solid var(--naranja);outline-offset:2px;}
 `;
