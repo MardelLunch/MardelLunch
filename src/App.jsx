@@ -26,10 +26,15 @@ const CARTA = [
   ["Empanadas", 1250],
   ["Canastitas", 1250],
   ["Pizzetas", 1000],
+  ["Pizzetas de la casa", 1250],
   ["Chips", 1125],
   ["Fosforitos", 1125],
   ["Albondiguitas", 1125],
   ["Salchichitas envueltas", 750],
+  ["Cuadraditos de tortilla", 917],
+  ["Mini bagels", 1250],
+  ["Mini pinchos", 1000],
+  ["Hamburguesitas", 1250],
   ["Medialunas j&q", 1375],
   ["Morenitos", 1375],
   ["Sang. de miga", 1750],
@@ -39,28 +44,51 @@ const CARTA = [
   ["Tortilla de papa", 9000],
 ];
 
-/* lista de precios de septiembre: se aplica sola una vez */
-const PRECIOS_V = 2;
+/* lista de precios de octubre: se aplica sola una vez.
+   El orden importa: las reglas más específicas van primero. */
+const PRECIOS_V = 3;
 const PRECIOS_NUEVOS = [
-  [["pollo"], 1375],
+  [["pizzeta de la casa", "pizzetas de la casa"], 1250],
+  [["cuadradito"], 917],
+  [["bagel"], 1250],
+  [["pincho"], 1000],
+  [["hamburgues"], 1250],
   [["medialuna"], 1375],
-  [["albondiguita"], 1125],
   [["morenito"], 1375],
   [["desmechada"], 1375],
-  [["tortilla"], 9000],
+  [["milanesa"], 1375],
+  [["pollo"], 1375],
+  [["albondiguita"], 1125],
   [["chip"], 1125],
+  [["fosforito"], 1125],
   [["canastita"], 1250],
   [["empanada"], 1250],
-  [["milanesa"], 1375],
-  [["fosforito"], 1125],
   [["salchichita"], 750],
+  [["miga"], 1750],
   [["pizzeta"], 1000],
+  [["tortilla"], 9000],
 ];
-const actualizarPrecios = (productos) =>
-  productos.map((p) => {
+
+/* productos que se suman si todavía no están */
+const PRODUCTOS_NUEVOS = [
+  ["Pizzetas de la casa", 1250, ["pizzeta de la casa", "pizzetas de la casa"]],
+  ["Cuadraditos de tortilla", 917, ["cuadradito"]],
+  ["Mini bagels", 1250, ["bagel"]],
+  ["Mini pinchos", 1000, ["pincho"]],
+  ["Hamburguesitas", 1250, ["hamburgues"]],
+];
+
+function actualizarPrecios(productos) {
+  const conPrecio = productos.map((p) => {
     const fila = PRECIOS_NUEVOS.find(([claves]) => claves.some((k) => String(p.nombre).toLowerCase().includes(k)));
     return fila ? { ...p, precio: fila[1] } : p;
   });
+  PRODUCTOS_NUEVOS.forEach(([nombre, precio, claves]) => {
+    const existe = conPrecio.some((p) => claves.some((k) => String(p.nombre).toLowerCase().includes(k)));
+    if (!existe) conPrecio.push({ id: id(), nombre, precio, unit: true });
+  });
+  return conPrecio;
+}
 
 const conMayus = (t) => {
   const x = String(t || "").trim();
@@ -183,7 +211,7 @@ function mezclar(productos) {
 
 function armarOpciones(productos, personas, porPersona) {
   const objetivo = Math.max(6, Math.round(num(personas) * num(porPersona)));
-  const usables = productos.filter((p) => num(p.precio) > 0 && !/tortilla/i.test(p.nombre));
+  const usables = productos.filter((p) => num(p.precio) > 0 && !/tortilla de papa/i.test(p.nombre));
   if (!usables.length) return [];
 
   return ESTILOS.map(([nombre, pie, cuantos]) => {
